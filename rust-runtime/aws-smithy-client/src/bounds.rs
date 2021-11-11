@@ -7,7 +7,7 @@
 //! required for `call` and friends.
 //!
 //! The short-hands will one day be true [trait aliases], but for now they are traits with blanket
-//! implementations. Also, due to [compiler limitations], the bounds repeat a nubmer of associated
+//! implementations. Also, due to [compiler limitations], the bounds repeat a number of associated
 //! types with bounds so that those bounds [do not need to be repeated] at the call site. It's a
 //! bit of a mess to define, but _should_ be invisible to callers.
 //!

@@ -196,7 +196,7 @@ where
             Service<Operation<O, Retry>, Response = SdkSuccess<T>, Error = SdkError<E>> + Clone,
     {
         let connector = self.connector.clone();
-        let svc = ServiceBuilder::new()
+        let mut svc = ServiceBuilder::new()
             // Create a new request-scoped policy
             .retry(self.retry_policy.new_request_policy())
             .layer(ParseResponseLayer::<O, Retry>::new())
@@ -206,7 +206,11 @@ where
             .layer(DispatchLayer::new())
             .service(connector);
 
-        check_send_sync(svc).ready().await?.call(input).await
+        fn check_fut_send<F: Send + 'static>(f: F) -> F {
+            f
+        }
+
+        check_fut_send(svc.ready().await?.call(input)).await
     }
 
     /// Statically check the validity of a `Client` without a request to send.
