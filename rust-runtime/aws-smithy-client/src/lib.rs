@@ -102,7 +102,7 @@ use tower::{Layer, Service, ServiceBuilder, ServiceExt};
 
 /// Smithy service client.
 ///
-/// The service client is customizeable in a number of ways (see [`Builder`]), but most customers
+/// The service client is customizable in a number of ways (see [`Builder`]), but most customers
 /// can stick with the standard constructor provided by [`Client::new`]. It takes only a single
 /// argument, which is the middleware that fills out the [`http::Request`] for each higher-level
 /// operation so that it can ultimately be sent to the remote host. The middleware is responsible
@@ -206,6 +206,7 @@ where
     {
         let connector = self.connector.clone();
         let svc = ServiceBuilder::new()
+            .layer(TimeoutLayer::new(Duration::from_secs_f32(10.0)))
             // Create a new request-scoped policy
             .retry(self.retry_policy.new_request_policy())
             .layer(ParseResponseLayer::<O, Retry>::new())
@@ -214,9 +215,6 @@ where
             .layer(&self.middleware)
             .layer(DispatchLayer::new())
             .service(connector);
-        let svc = TimeoutService {
-            inner: check_input(svc), //check_input(svc),
-        };
 
         check_send_sync(svc).ready().await?.call(input).await
     }
@@ -246,15 +244,41 @@ where
     }
 }
 
-struct TimeoutService<InnerService> {
+#[derive(Debug)]
+pub struct TimeoutService<InnerService> {
     inner: InnerService,
+    duration: Duration,
+}
+
+/// A layer that wraps services in a timeout service
+#[non_exhaustive]
+#[derive(Debug)]
+pub struct TimeoutLayer(Duration);
+
+impl TimeoutLayer {
+    /// Create a new HttpRequestTimeoutLayer
+    pub fn new(duration: Duration) -> Self {
+        TimeoutLayer(duration)
+    }
+}
+
+impl<InnerService> Layer<InnerService> for TimeoutLayer {
+    type Service = TimeoutService<InnerService>;
+
+    fn layer(&self, inner: InnerService) -> Self::Service {
+        TimeoutService {
+            inner,
+            duration: self.0,
+        }
+    }
 }
 
 pin_project! {
     #[non_exhaustive]
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     #[derive(Debug)]
-    struct TimeoutLayerFuture<T> {
+    /// A future representing a timeout timer. Wraps a
+    pub struct TimeoutLayerFuture<T> {
         #[pin]
         inner: Timeout<T, Sleep>
     }
@@ -278,19 +302,9 @@ where
     }
 }
 
-fn check_input<InnerService, H, R, E>(t: InnerService) -> InnerService
-where
-    InnerService: tower::Service<Operation<H, R>, Error = SdkError<E>>,
-    //InnerService::Future: Send, // + 'static,
-    //InnerService::Response: 'static,
-{
-    t
-}
-
 impl<H, R, InnerService, E> tower::Service<Operation<H, R>> for TimeoutService<InnerService>
 where
     InnerService: tower::Service<Operation<H, R>, Error = SdkError<E>>,
-    //InnerService::Future: Send + 'static,
 {
     type Response = InnerService::Response;
     type Error = aws_smithy_http::result::SdkError<E>;
@@ -302,10 +316,7 @@ where
 
     fn call(&mut self, req: Operation<H, R>) -> Self::Future {
         let base_future = self.inner.call(req);
-        let with_timeout = Timeout::new(
-            base_future,
-            TokioSleep::new().sleep(Duration::from_secs(10)),
-        );
+        let with_timeout = Timeout::new(base_future, TokioSleep::new().sleep(self.duration));
         TimeoutLayerFuture {
             inner: with_timeout,
         }
