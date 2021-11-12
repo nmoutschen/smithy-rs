@@ -34,6 +34,8 @@ pub mod hyper_ext {
     pub use crate::hyper_impls::HyperAdapter as Adapter;
 }
 
+use pin_project_lite::pin_project;
+
 // The types in this module are only used to write the bounds in [`Client::check`]. Customers will
 // not need them. But the module and its types must be public so that we can call `check` from
 // doc-tests.
@@ -88,7 +90,14 @@ use aws_smithy_http_tower::dispatch::DispatchLayer;
 use aws_smithy_http_tower::parse_response::ParseResponseLayer;
 use aws_smithy_types::retry::ProvideErrorKind;
 use std::error::Error;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
+use crate::retry::NewRequestPolicy;
+use aws_smithy_async::future::timeout::Timeout;
+use aws_smithy_async::rt::sleep::{AsyncSleep, Sleep, TokioSleep};
 use tower::{Layer, Service, ServiceBuilder, ServiceExt};
 
 /// Smithy service client.
@@ -205,6 +214,9 @@ where
             .layer(&self.middleware)
             .layer(DispatchLayer::new())
             .service(connector);
+        let svc = TimeoutService {
+            inner: check_input(svc), //check_input(svc),
+        };
 
         check_send_sync(svc).ready().await?.call(input).await
     }
@@ -222,9 +234,80 @@ where
                 SdkSuccess<()>,
                 SdkError<static_tests::TestOperationError>,
             > + Clone,
+        <<R as NewRequestPolicy>::Policy as tower::retry::Policy<
+            static_tests::ValidTestOperation,
+            SdkSuccess<()>,
+            SdkError<static_tests::TestOperationError>,
+        >>::Future: Send + 'static,
     {
         let _ = |o: static_tests::ValidTestOperation| {
             let _ = self.call_raw(o);
         };
+    }
+}
+
+struct TimeoutService<InnerService> {
+    inner: InnerService,
+}
+
+pin_project! {
+    #[non_exhaustive]
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    #[derive(Debug)]
+    struct TimeoutLayerFuture<T> {
+        #[pin]
+        inner: Timeout<T, Sleep>
+    }
+}
+
+impl<InnerFuture, T, E> Future for TimeoutLayerFuture<InnerFuture>
+where
+    InnerFuture: Future<Output = Result<T, SdkError<E>>>,
+{
+    type Output = Result<T, SdkError<E>>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let me = self.project();
+        match me.inner.poll(cx) {
+            Poll::Ready(Ok(t)) => Poll::Ready(t),
+            Poll::Ready(Err(timeout)) => {
+                Poll::Ready(Err(SdkError::ConstructionFailure(timeout.into())))
+            } // todo: need to put this in the right place
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+fn check_input<InnerService, H, R, E>(t: InnerService) -> InnerService
+where
+    InnerService: tower::Service<Operation<H, R>, Error = SdkError<E>>,
+    //InnerService::Future: Send, // + 'static,
+    //InnerService::Response: 'static,
+{
+    t
+}
+
+impl<H, R, InnerService, E> tower::Service<Operation<H, R>> for TimeoutService<InnerService>
+where
+    InnerService: tower::Service<Operation<H, R>, Error = SdkError<E>>,
+    //InnerService::Future: Send + 'static,
+{
+    type Response = InnerService::Response;
+    type Error = aws_smithy_http::result::SdkError<E>;
+    type Future = TimeoutLayerFuture<InnerService::Future>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Operation<H, R>) -> Self::Future {
+        let base_future = self.inner.call(req);
+        let with_timeout = Timeout::new(
+            base_future,
+            TokioSleep::new().sleep(Duration::from_secs(10)),
+        );
+        TimeoutLayerFuture {
+            inner: with_timeout,
+        }
     }
 }

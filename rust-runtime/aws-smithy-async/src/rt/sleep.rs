@@ -6,6 +6,7 @@
 //! Provides an [`AsyncSleep`] trait that returns a future that sleeps for a given duration,
 //! and implementations of `AsyncSleep` for different async runtimes.
 
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -51,6 +52,12 @@ pub struct Sleep(Pin<Box<dyn Future<Output = ()> + Send + 'static>>);
 impl Sleep {
     pub fn new(future: impl Future<Output = ()> + Send + 'static) -> Sleep {
         Sleep(Box::pin(future))
+    }
+}
+
+impl Debug for Sleep {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sleep future // clean me up")
     }
 }
 
