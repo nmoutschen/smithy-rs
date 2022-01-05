@@ -26,11 +26,14 @@ pub fn delete_all_generated_files_and_folders(directory: &Path) -> anyhow::Resul
     let mut folder_count = 0;
 
     for path in generated_files {
+        let path = path.as_path();
         if path.is_file() {
-            std::fs::remove_file(path)?;
+            std::fs::remove_file(path)
+                .with_context(|| format!("{} for file {}", here!(), path.display()))?;
             file_count += 1;
         } else if path.is_dir() {
-            std::fs::remove_dir_all(path)?;
+            std::fs::remove_dir_all(path)
+                .with_context(|| format!("{} for file {}", here!(), path.display()))?;
             folder_count += 1;
         };
     }
