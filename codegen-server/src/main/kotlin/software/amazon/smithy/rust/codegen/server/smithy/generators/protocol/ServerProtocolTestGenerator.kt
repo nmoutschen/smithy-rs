@@ -108,6 +108,9 @@ class ServerProtocolTestGenerator(
                 )
             )
             writer.withModule(testModuleName, moduleMeta) {
+                Attribute.Cfg("test").render(this)
+                rustTemplate("use #{PrettyAssertions}::assert_eq;",
+                    "PrettyAssertions" to CargoDependency.PrettyAssertions.asType())
                 renderAllTestCases(allTests)
             }
         }
